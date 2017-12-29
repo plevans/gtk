@@ -587,16 +587,51 @@ render_color_node (GskGLRenderer       *self,
 }
 
 static inline void
-render_texture_node (GskGLRenderer       *self,
-                     GskRenderNode       *node,
-                     RenderOpBuilder     *builder,
-                     const GskQuadVertex *vertex_data)
+render_texture_node (GskGLRenderer   *self,
+                     GskRenderNode   *node,
+                     RenderOpBuilder *builder)
 {
+  const GskRoundedRect *clip = &builder->current_clip;
+  const float clip_x1 = clip->bounds.origin.x;
+  const float clip_x2 = clip_x1 + clip->bounds.size.width;
+  const float clip_y1 = clip->bounds.origin.y;
+  const float clip_y2 = clip_y1 + clip->bounds.size.height;
+  float min_x = node->bounds.origin.x;
+  float min_y = node->bounds.origin.y;
+  float max_x = min_x + node->bounds.size.width;
+  float max_y = min_y + node->bounds.size.height;
+  float tx1 = 0, tx2 = 1;
+  float ty1 = 0, ty2 = 1;
   GdkTexture *texture = gsk_texture_node_get_texture (node);
   int gl_min_filter = GL_NEAREST, gl_mag_filter = GL_NEAREST;
   int texture_id;
 
   get_gl_scaling_filters (node, &gl_min_filter, &gl_mag_filter);
+
+
+  if (clip_x1 > min_x)
+    {
+      tx1 = (clip_x1 - min_x) / (max_x - min_y);
+      min_x = clip_x1;
+    }
+
+  if (max_x > clip_x2)
+    {
+      tx2 = 1 - ((max_x - clip_x2) / (max_x - min_x));
+      max_x = clip_x2;
+    }
+
+  if (clip_y1 > min_y)
+    {
+      ty1 = (clip->bounds.origin.y - min_y) / (max_y - min_y);
+      min_y = clip->bounds.origin.y;
+    }
+
+  if (max_y > clip_y2)
+    {
+      ty2 = 1 - ((max_y - clip_y2) / (max_y - min_y));
+      max_y = clip_y2;
+    }
 
   texture_id = gsk_gl_driver_get_texture_for_texture (self->gl_driver,
                                                       texture,
@@ -604,7 +639,15 @@ render_texture_node (GskGLRenderer       *self,
                                                       gl_mag_filter);
   ops_set_program (builder, &self->blit_program);
   ops_set_texture (builder, texture_id);
-  ops_draw (builder, vertex_data);
+  ops_draw (builder, (GskQuadVertex[GL_N_VERTICES]){
+    { { min_x, min_y }, { tx1, ty1 }, },
+    { { min_x, max_y }, { tx1, ty2 }, },
+    { { max_x, min_y }, { tx2, ty1 }, },
+
+    { { max_x, max_y }, { tx2, ty2 }, },
+    { { min_x, max_y }, { tx1, ty2 }, },
+    { { max_x, min_y }, { tx2, ty1 }, },
+  });
 }
 
 static inline void
@@ -2082,7 +2125,7 @@ gsk_gl_renderer_add_render_ops (GskGLRenderer   *self,
     break;
 
     case GSK_TEXTURE_NODE:
-      render_texture_node (self, node, builder, vertex_data);
+      render_texture_node (self, node, builder);
     break;
 
     case GSK_CAIRO_NODE:
